@@ -1,0 +1,296 @@
+---
+title: "QC Pipeline"
+author: "Magnus Palmblad"
+date: "October 25, 2018"
+output:
+  pdf_document: default
+---
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>. This Markdown contains all steps for a rich QC analysis from a HeLa cell digest LC-MS/MS dataset based on the [Trans-Proteomic Pipeline](http://tools.proteomecenter.org/wiki/index.php?title=Software:TPP).
+
+
+```{r Global Options, include=FALSE}
+knitr::opts_chunk$set(fig.width=5, fig.height=5, fig.align='center', warning=FALSE, message=FALSE)
+```
+
+
+#### 1. Load R packages and specify the search parameters and sequence database
+
+First we load R packages, specify the parameters and sequence database:
+
+```{r Setup}
+library(mzR)
+library(XML)
+library(scales)
+REFERENCE <- '2018-10-15_HeLa_OTOT'                         # reference (could be local)
+QUERY <- '2018-10-18_HeLa_OTOT'                             # query for QC
+AMOUNT_INJECTED <- 200                                      # ng HeLa injected (reference)
+SPECTRAST_LIBRARY <- 'HeLa.splib'                           # HeLa library
+FASTA_FILE <- 'up000005640.fasta'                           # sequence database
+```
+
+
+#### 2. Convert raw data to mzML
+
+Then we convert the raw file to mzML:
+
+```{r Msconvert, eval=TRUE}
+#system(paste('msconvert ', REFERENCE, '.raw -v --mzML', sep=''))   # convert reference file
+system(paste('msconvert ', QUERY, '.raw -v --mzML', sep=''))       # convert query file
+```
+
+
+### 3. Look up instrument manufacturer and model from query mzML file
+
+Here we read in instrument metadata from the mzML file using the [mzR](http://bioconductor.org/packages/release/bioc/html/mzR.html) package. 
+
+```{r Extract instrumentInfo}
+query_file <- openMSfile(paste(QUERY, '.mzML', sep=''))
+make <- instrumentInfo(query_file)$manufacturer
+model <- instrumentInfo(query_file)$model
+cat('Query file is', make, model)   # look up make and model of file for QC    
+```
+
+
+#### 4. Perform SpectraST search
+
+Next we run comet with the defined parameters on each mzML file separately:
+
+```{r SpectraST search, eval=TRUE}
+system(paste('spectrast -sL', SPECTRAST_LIBRARY, ' -sD', FASTA_FILE,
+             ' -sTAA -sA! -s_HOM4 -sR! -sEpep.xml ', QUERY, '.mzML', sep = ''))
+```
+
+
+#### 5. Validate search results with PeptideProphet
+
+We then validate the comet peptide-spectrum matches using PeptideProphet, keeping only p>=0.95:
+
+```{r PeptideProphet, eval=TRUE}
+system(paste('xinteract -N', sub('$', '.interact.pep.xml', QUERY), 
+             ' -p0.95 -l7 -PPM -O -D', FASTA_FILE, ' ', QUERY, '.pep.xml', sep = ''))
+```
+
+
+### 6. Extract QC values from query and compare with reference
+
+Here we extract and plot the TICs from the mzML files: 
+
+```{r Extract TICs}
+reference_file <- openMSfile(paste(REFERENCE, '.mzML', sep=''))
+query_file <- openMSfile(paste(QUERY, '.mzML', sep=''))
+
+reference_TIC <- tic(reference_file)
+query_TIC <- tic(query_file)
+
+cat('Query TIC total area ', 100*sum(query_TIC)/sum(reference_TIC), '% of reference.',
+    sep='')
+cat('Est. amount injected ', AMOUNT_INJECTED*sum(query_TIC)/sum(reference_TIC), ' ng.',
+    sep='')
+
+plot(reference_TIC[,1], reference_TIC[,2], type="h", lwd=1, col='green', 
+     xlab='retention time (min)', ylab='total ion current')
+lines(query_TIC[,1], query_TIC[,2], type="h", lwd=1, col='blue')
+```
+\begin{center}Figure 1: Total ion chromatograms of reference (green) and query (blue).\end{center}
+
+
+### 7. Compare multiple TICs side-by-side
+
+Here we plot TICs "heatmaps" side-by-side: 
+
+```{r Compare TICs side-by-side}
+N_COMPARANDS <- 2
+max_t <- round(max(reference_TIC[,1], query_TIC[,1]))
+TIC_sum <- matrix(rep(0, N_COMPARANDS*max_t), nrow=N_COMPARANDS)
+
+for(x in 0:length(reference_TIC[,1])) TIC_sum[1,round(reference_TIC[x,1])] <-
+  TIC_sum[1,round(reference_TIC[x,1])]+reference_TIC[x,2]
+
+for(x in 0:length(query_TIC[,1])) TIC_sum[2,round(query_TIC[x,1])] <-
+  TIC_sum[2,round(query_TIC[x,1])]+query_TIC[x,2]
+
+plot(0, 0, type="n", xaxs="i", yaxs="i", col="black", xlim=c(0, 20.5), ylim=c(0, max_t), 
+     xlab='run', ylab='retention time (min)', xaxp=c(1, 20, 19),
+     yaxp=c(0, max_t, round(max_t/10)))
+
+for(y in 0:max_t) {
+  rel_int <- 1-TIC_sum[1,y]/max(TIC_sum)
+  rect(0.5, y, 1.5, y+1, col=rgb(rel_int, rel_int, rel_int), border=NA)
+}
+
+for(y in 0:max_t) {
+  rel_int <- 1-TIC_sum[2,y]/max(TIC_sum)
+  rect(1.5, y, 2.5, y+1, col=rgb(rel_int, rel_int, rel_int), border=NA)
+}
+
+reds <- rep(0,512); reds[257:512] <- (0:255)/255
+greens <- rep(0,512); greens[1:256] <- (0:255)/255; greens[257:512] <- (255:0)/255
+blues <- rep(0,512); blues[1:256] <- (255:0)/255
+
+for(y in 0:max_t) {
+  rel_int <- TIC_sum[1,y]/max(TIC_sum); col_idx <- round(512*rel_int)
+  rect(4.5, y, 5.5, y+1, col=rgb(reds[col_idx],greens[col_idx],blues[col_idx]), border=NA)
+}
+
+for(y in 0:max_t) {
+  rel_int <- TIC_sum[2,y]/max(TIC_sum); col_idx <- round(512*rel_int)
+  rect(5.5, y, 6.5, y+1, col=rgb(reds[col_idx],greens[col_idx],blues[col_idx]), border=NA)
+}
+
+gradient <- viridis_pal(direction=-1, option='A')(512)
+for(y in 0:max_t) {
+  rel_int <- TIC_sum[1,y]/max(TIC_sum); col_idx <- round(512*rel_int)
+  rect(8.5, y, 9.5, y+1, col=gradient[col_idx], border=NA)
+}
+
+for(y in 0:max_t) {
+  rel_int <- TIC_sum[2,y]/max(TIC_sum); col_idx <- round(512*rel_int)
+  rect(9.5, y, 10.5, y+1, col=gradient[col_idx], border=NA)
+}
+
+gradient <- viridis_pal(direction=-1, option='D')(512)
+for(y in 0:max_t) {
+  rel_int <- TIC_sum[1,y]/max(TIC_sum); col_idx <- round(512*rel_int)
+  rect(12.5, y, 13.5, y+1, col=gradient[col_idx], border=NA)
+}
+
+for(y in 0:max_t) {
+  rel_int <- TIC_sum[2,y]/max(TIC_sum); col_idx <- round(512*rel_int)
+  rect(13.5, y, 14.5, y+1, col=gradient[col_idx], border=NA)
+}
+
+gradient <- viridis_pal(direction=-1, option='E')(512)
+for(y in 0:max_t) {
+  rel_int <- TIC_sum[1,y]/max(TIC_sum); col_idx <- round(512*rel_int)
+  rect(16.5, y, 17.5, y+1, col=gradient[col_idx], border=NA)
+}
+
+for(y in 0:max_t) {
+  rel_int <- TIC_sum[2,y]/max(TIC_sum); col_idx <- round(512*rel_int)
+  rect(17.5, y, 18.5, y+1, col=gradient[col_idx], border=NA)
+}
+```
+\begin{center}Figure 2: Total ion chromatograms of (up to) 20 runs shown side-by-side, here comparing some homemade and Viridis gradients.\end{center}
+
+
+### 8. Extract PSMs from query and compare with reference
+
+Here we read in the library search results and compare with those from the reference:
+
+```{r Extract PSMs}
+system(paste('idconvert ', REFERENCE, '.interact.pep.xml', sep='')) 
+system(paste('idconvert ', QUERY, '.interact.pep.xml', sep='')) 
+
+reference_ids <- openIDfile(paste(REFERENCE, '.mzid', sep=''))
+query_ids <- openIDfile(paste(QUERY, '.mzid', sep=''))
+
+PSMs <- c(nrow(psms(reference_ids)), nrow(psms(query_ids)))
+barplot(PSMs, names.arg=c('reference','query'), col=c("green","blue"),
+        ylab='PSMs (p>=0.95)')
+```
+\begin{center}Figure 3: Number of PSMs from SpectraST library search of reference (green) and query (blue).\end{center}
+
+
+### 9. Look at retention coefficients
+
+Here we train a linear model (Palmblad *et al*., 2002) for predicting retention times, and compare the amino acid coefficients of the query model with those from the reference model. This will reveal changes in mobile phase composition, such as ionic strength or pH:
+
+```{r Compare retention coefficients}
+reference_coeffs <- system(paste('rt -i ', tolower(REFERENCE), '.pep.xml -f tab',
+                               sep=''), intern=TRUE)
+aa_olc <- gsub('\\t.+$', '', reference_coeffs)
+reference_coeffs <- as.numeric(gsub('.\\t', '', reference_coeffs))
+
+query_coeffs <- system(paste('rt -i ', tolower(QUERY), '.pep.xml -f tab',
+                           sep=''), intern=TRUE) 
+query_coeffs <- as.numeric(gsub('.\\t', '', query_coeffs))
+
+aa_colors<-c('orange', 'blue', 'magenta', 'red', 'green', 'red', 'magenta', 'orange',
+             'blue', 'green', 'green', 'blue', 'green', 'green', 'green', 'orange', 
+             'orange', 'green', 'green', 'green', 'yellow', 'yellow', 'yellow', 
+             'yellow', 'black')
+limits <- c(min(reference_coeffs[1:20], query_coeffs[1:20]), max(reference_coeffs[1:20], 
+                                                                 query_coeffs[1:20]))
+plot(reference_coeffs[1:20], query_coeffs[1:20], pch=19, cex=2.5, 
+     col=alpha(aa_colors, 0.6), xlab='reference retention coefficient (min)', 
+     ylab='query retention coefficient (min)', xlim=limits, ylim=limits)
+text(reference_coeffs[1:20], query_coeffs[1:20]+0.0047*(max(query_coeffs[1:20])-
+     min(query_coeffs[1:20])), aa_olc[1:20], col='white', font=2, cex=0.8)
+```
+\begin{center}Figure 4: Retention time coefficients for query compared with reference.\end{center}
+
+
+```{r Compare retention coefficients pH demonstration}
+reference_coeffs <- system(paste(
+  'rt -i 141117.LC6.IT6.EC.S03729.Ecoli_1-B,3_01_9043.interact.pep.xml -f tab',
+  sep=''), intern=TRUE)
+aa_olc <- gsub('\\t.+$', '', reference_coeffs)
+reference_coeffs <- as.numeric(gsub('.\\t', '', reference_coeffs))
+
+query_coeffs <- system(paste(
+  'rt -i 150317.LC6.IT6.EC.Standard_1-B,1_01_9508.interact.pep.xml -f tab',
+  sep=''), intern=TRUE) 
+query_coeffs <- as.numeric(gsub('.\\t', '', query_coeffs))
+
+aa_colors<-c('orange', 'blue', 'magenta', 'red', 'green', 'red', 'magenta', 'orange',
+             'blue', 'green', 'green', 'blue', 'green', 'green', 'green', 'orange', 
+             'orange', 'green', 'green', 'green', 'yellow', 'yellow', 'yellow', 
+             'yellow', 'black')
+limits <- c(min(reference_coeffs[1:20], query_coeffs[1:20]), max(reference_coeffs[1:20], 
+                                                                 query_coeffs[1:20]))
+plot(reference_coeffs[1:20], query_coeffs[1:20], pch=19, cex=2.5, 
+     col=alpha(aa_colors, 0.6), xlab='reference retention coefficient (min)', 
+     ylab='query retention coefficient (min)', xlim=limits, ylim=limits)
+text(reference_coeffs[1:20], query_coeffs[1:20]+0.0047*(max(query_coeffs[1:20])-
+     min(query_coeffs[1:20])), aa_olc[1:20], col='white', font=2, cex=0.8)
+```
+\begin{center}Figure 5: Retention time coefficients for query (pH=8.5) compared with reference (pH=3.0).\end{center}
+
+
+
+
+### 10. Look at signal stability
+
+Here we look at signal stability:
+
+```{r Compare signal stability}
+# reference_file <- openMSfile(paste(REFERENCE, '.mzML', sep=''))
+query_file <- openMSfile(paste(QUERY, '.mzML', sep=''))
+
+# cat <QUERY>.mzML | grep MS:1000285 | awk '{gsub("value=\"",""); gsub("\"/>",""); print $7}' > QUERY_TIC.txt
+# cat <REFERENCE>.mzML | grep MS:1000285 | awk '{gsub("value=\"",""); gsub("\"/>",""); print $7}' > REFERENCE_TIC.txt
+
+query_TIC<-read.csv('QUERY_TIC.txt')
+reference_TIC<-read.csv('REFERENCE_TIC.txt')
+
+query_TIC <- query_TIC*rnorm(dim(query_TIC)[1], mean=1, sd=1)
+
+x <- query_TIC[,1]
+# x <- x*rnorm(length(x), mean=1, sd=0.2)
+# plot(1:length(x),x,type='l')
+query_cor <- cor(x[-length(x)],x[-1])
+x <- reference_TIC[,1]
+reference_cor <- cor(x[-length(x)],x[-1])
+
+
+# lag-one autocorrelation of MS1 only:
+
+x <- query_TIC[,2]
+query_cor <- cor(x[-length(x)],x[-1])
+query_cor
+
+plot(query_TIC[,2][20000:20500],type='l')
+plot(test_TIC[,2][20000:20500],type='l')
+
+cat('Query TIC total area ', 100*sum(query_TIC)/sum(reference_TIC), '% of reference.',
+    sep='')
+cat('Est. amount injected ', AMOUNT_INJECTED*sum(query_TIC)/sum(reference_TIC), ' ng.',
+    sep='')
+
+plot(reference_TIC[,1], reference_TIC[,2], type="h", lwd=1, col='green', 
+     xlab='retention time (min)', ylab='total ion current')
+lines(query_TIC[,1], query_TIC[,2], type="h", lwd=1, col='blue')
+```
+\begin{center}Figure 4: Retention time coefficients for query compared with reference.\end{center}
+

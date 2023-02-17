@@ -1,0 +1,173 @@
+---
+title: "LC QC Report"
+output:
+  html_document: default
+  pdf_document: default
+date version: May 22, 2019
+---
+
+[//]: # (This sub-report contains metrics related to the performance of LC system components. Metrics include estimated pH of mobile phases, column heater, shape of gradient, peak shape statistics (such as FWHM for 25, 50 and 75% quartiles and base peak width). Future work will include determining % TIC that is polysiloxane or detergents in order to evaluate column health and system contamination. This sub-report assumes the MS2.Rmd has been run first so that the files are available.)
+
+
+```{r Global Options, echo=FALSE}
+knitr::opts_chunk$set(fig.width=5, fig.height=5, fig.align='center', warning=FALSE, message=FALSE, error=TRUE)
+options(tinytex.verbose = TRUE)
+```
+
+
+[//]: # (1. Load R packages and specify the search parameters and sequence database)
+
+```{r Setup, echo=FALSE}
+library(mzR)
+library(MSnbase)
+library(scales)
+library(XML)
+library(pepXMLTab)
+library(ggplot2)
+
+# Commented out lines must be set before render call
+#QUERY <- '2018-10-18_HeLa_OTOT'                              # query for QC
+QUERY <- '2018_06_27_HeLa_OTOT'  
+#OUTPUT_DIR <- '/tmp/lkjdflkj'
+MZML_DIR <- 'C:/TPP/data/Ben'
+
+# The following are hard coded for now
+REFERENCE <- '2018-10-15_HeLa_OTOT'                          # reference (could be local)
+AMOUNT_INJECTED <- 200                                       # ng HeLa injected (reference)
+SPECTRAST_LIBRARY <- 'C:/TPP/data/Ben/HeLa.splib'                # HeLa library
+FASTA_FILE <- 'C:/TPP/data/Ben/up000005640.fasta'                # sequence database
+mzml_file <- paste(MZML_DIR,'/',QUERY,'.mzML',sep='')
+# cat('mzML file is',mzml_file)
+```
+
+
+[//]: # (1. Estimate peak capacity)
+
+[//]: # (Calculate peak capacity as defined in QuiC or ID-free?)
+
+```{r Estimate peak capacity, eval=TRUE, echo=FALSE}
+query <- readMSData(paste(QUERY, '.mzML', sep=''), msLevel = 1) # works, but quite slow...
+query_BPC <- chromatogram(query, aggregationFun = "max")
+
+# query_BPC <- chromatogram(query, mz = c(600,610), aggregationFun = "max") # smaller m/z windows?
+
+x <- as.numeric(query_BPC[1,1]@rtime)
+y <- as.numeric(query_BPC[1,1]@intensity)
+
+x2 <- seq(round(min(x)),round(max(x)),0.1)
+y2 <- rep(0,length(x2))
+
+for(i in 1:length(y2)) {
+  j <- which.min(abs(x2[i]-x))
+  y2[i] <- y[j]
+}
+  
+fy2 <- Re(fft(fft(y2)*Conj(fft(y2)), inverse = TRUE))
+
+max_fy2 <- max(fy2)
+min_fy2_w <- min(fy2[1:1000])
+for(i in 1:1000) {if(fy2[i]<(min_fy2_w+(max_fy2-min_fy2_w)/2)) break}
+peak_width <- 1.412517*i*0.1 # FWHM = 1.412517 * (lag at autocorrelation half maximum for gaussian)
+cat('Mean peak width (FWHM equivalent) =', signif(peak_width, digits=4), "seconds")
+
+gradient_length <- 120*60 # in seconds
+cat('Theor. peak capacity =', signif(gradient_length/peak_width, digits=4))
+```
+\begin{center}Figure 1: Peak capacity.\end{center}
+
+[//]: # (2. Look at retention coefficients)
+
+[//]: # (Here we train a linear model (Palmblad *et al*., 2002) for predicting retention times, and compare the amino acid coefficients of the query model with those from the reference model. This will reveal changes in mobile phase composition, such as ionic strength or pH. The training is here done with R packages.)
+
+```{r Compare retention coefficients R-only, eval=TRUE, echo=FALSE}
+peptides <-c(); RTs <- c()
+psms <- xmlToList(paste(tolower(QUERY), '.interact.pep.xml', sep=''))
+for (i in seq(5,length(psms$msms_run_summary)-1)) {
+    peptides <- c(peptides,as.character(psms$msms_run_summary[i]$spectrum_query$search_result$search_hit$.attrs['peptide']))
+    RTs <- c(RTs,as.numeric(psms$msms_run_summary[i]$spectrum_query$.attrs['retention_time_sec']))
+}
+meanRT <- mean(RTs)
+sdRT <- sd(RTs)
+ZRTs <- (RTs - meanRT)/sdRT
+ 
+nA<-c(); nR<-c(); nN<-c(); nD<-c(); nC<-c(); nE<-c(); nQ<-c(); nG<-c(); nH<-c(); nI<-c();
+nL<-c(); nK<-c(); nM<-c(); nF<-c(); nP<-c(); nS<-c(); nT<-c(); nW<-c(); nY<-c(); nV<-c();
+
+for (i in 1:length(peptides)) {
+  nA[i] <- sum(charToRaw(peptides[i]) == charToRaw('A'))
+  nR[i] <- sum(charToRaw(peptides[i]) == charToRaw('R'))
+  nN[i] <- sum(charToRaw(peptides[i]) == charToRaw('N'))
+  nD[i] <- sum(charToRaw(peptides[i]) == charToRaw('D'))
+  nC[i] <- sum(charToRaw(peptides[i]) == charToRaw('C'))
+  nE[i] <- sum(charToRaw(peptides[i]) == charToRaw('E'))
+  nQ[i] <- sum(charToRaw(peptides[i]) == charToRaw('Q'))
+  nG[i] <- sum(charToRaw(peptides[i]) == charToRaw('G'))
+  nH[i] <- sum(charToRaw(peptides[i]) == charToRaw('H'))
+  nI[i] <- sum(charToRaw(peptides[i]) == charToRaw('I'))
+  nL[i] <- sum(charToRaw(peptides[i]) == charToRaw('L'))
+  nK[i] <- sum(charToRaw(peptides[i]) == charToRaw('K'))
+  nM[i] <- sum(charToRaw(peptides[i]) == charToRaw('M'))
+  nF[i] <- sum(charToRaw(peptides[i]) == charToRaw('F'))
+  nP[i] <- sum(charToRaw(peptides[i]) == charToRaw('P'))
+  nS[i] <- sum(charToRaw(peptides[i]) == charToRaw('S'))
+  nT[i] <- sum(charToRaw(peptides[i]) == charToRaw('T'))
+  nW[i] <- sum(charToRaw(peptides[i]) == charToRaw('W'))
+  nY[i] <- sum(charToRaw(peptides[i]) == charToRaw('Y'))
+  nV[i] <- sum(charToRaw(peptides[i]) == charToRaw('V'))
+}
+
+fit <- lm(ZRTs ~ nA+nR+nN+nD+nC+nE+nQ+nG+nH+nI+nL+nK+nM+nF+nP+nS+nT+nW+nY+nV)
+query_coeffs <- as.vector(coefficients(fit))
+
+peptides <-c(); RTs <- c()
+psms <- xmlToList(paste(tolower(REFERENCE), '.interact.pep.xml', sep=''))
+for (i in seq(5,length(psms$msms_run_summary)-1)) {
+    peptides <- c(peptides,as.character(psms$msms_run_summary[i]$spectrum_query$search_result$search_hit$.attrs['peptide']))
+    RTs <- c(RTs,as.numeric(psms$msms_run_summary[i]$spectrum_query$.attrs['retention_time_sec']))
+}
+meanRT <- mean(RTs)
+sdRT <- sd(RTs)
+ZRTs <- (RTs - meanRT)/sdRT
+
+nA<-c(); nR<-c(); nN<-c(); nD<-c(); nC<-c(); nE<-c(); nQ<-c(); nG<-c(); nH<-c(); nI<-c();
+nL<-c(); nK<-c(); nM<-c(); nF<-c(); nP<-c(); nS<-c(); nT<-c(); nW<-c(); nY<-c(); nV<-c();
+
+for (i in 1:length(peptides)) {
+  nA[i] <- sum(charToRaw(peptides[i]) == charToRaw('A'))
+  nR[i] <- sum(charToRaw(peptides[i]) == charToRaw('R'))
+  nN[i] <- sum(charToRaw(peptides[i]) == charToRaw('N'))
+  nD[i] <- sum(charToRaw(peptides[i]) == charToRaw('D'))
+  nC[i] <- sum(charToRaw(peptides[i]) == charToRaw('C'))
+  nE[i] <- sum(charToRaw(peptides[i]) == charToRaw('E'))
+  nQ[i] <- sum(charToRaw(peptides[i]) == charToRaw('Q'))
+  nG[i] <- sum(charToRaw(peptides[i]) == charToRaw('G'))
+  nH[i] <- sum(charToRaw(peptides[i]) == charToRaw('H'))
+  nI[i] <- sum(charToRaw(peptides[i]) == charToRaw('I'))
+  nL[i] <- sum(charToRaw(peptides[i]) == charToRaw('L'))
+  nK[i] <- sum(charToRaw(peptides[i]) == charToRaw('K'))
+  nM[i] <- sum(charToRaw(peptides[i]) == charToRaw('M'))
+  nF[i] <- sum(charToRaw(peptides[i]) == charToRaw('F'))
+  nP[i] <- sum(charToRaw(peptides[i]) == charToRaw('P'))
+  nS[i] <- sum(charToRaw(peptides[i]) == charToRaw('S'))
+  nT[i] <- sum(charToRaw(peptides[i]) == charToRaw('T'))
+  nW[i] <- sum(charToRaw(peptides[i]) == charToRaw('W'))
+  nY[i] <- sum(charToRaw(peptides[i]) == charToRaw('Y'))
+  nV[i] <- sum(charToRaw(peptides[i]) == charToRaw('V'))
+}
+
+fit <- lm(ZRTs ~ nA+nR+nN+nD+nC+nE+nQ+nG+nH+nI+nL+nK+nM+nF+nP+nS+nT+nW+nY+nV)
+reference_coeffs <- as.vector(coefficients(fit))
+
+aa_olc <- c('O','A','R','N','D','C','E','Q','G','H','I','L','K','M','F','P','S','T','W','Y','V')
+
+aa_colors<-c('black','orange', 'blue', 'magenta', 'red', 'green', 'red', 'magenta', 'orange',
+           'blue', 'green', 'green', 'blue', 'green', 'green', 'green', 'orange', 
+           'orange', 'green', 'green', 'green', 'yellow', 'yellow', 'yellow', 'yellow')
+limits <- c(min(reference_coeffs[1:21], query_coeffs[1:21]), max(reference_coeffs[1:21], query_coeffs[1:21]))
+plot(reference_coeffs[1:21], query_coeffs[1:21], pch=19, cex=2.5, 
+     col=alpha(aa_colors, 0.6), xlab='reference retention coefficient (Z-score)', 
+     ylab='query retention coefficient (Z-score)', xlim=limits, ylim=limits, text(reference_coeffs[1:21], query_coeffs[1:21]+0.0047*(max(query_coeffs[1:21])-min(query_coeffs[1:21])), aa_olc, col='black', font=2, cex=0.8)) 
+
+abline(a=0, b=1, lty=2)
+```
+\begin{center}Figure 1: Retention time coefficients for query compared with reference. The closer to the 45-degree diagonal the better. Deviation in basic and/or acidic residues suggests different pH.\end{center}

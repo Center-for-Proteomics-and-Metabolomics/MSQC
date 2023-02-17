@@ -1,0 +1,169 @@
+---
+title: "QC Pipeline"
+author: "Magnus Palmblad"
+date: "November 5, 2018"
+output:
+  pdf_document: default
+---
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>. This Markdown contains all steps for a rich QC analysis from a HeLa cell digest LC-MS/MS dataset based on the [Trans-Proteomic Pipeline](http://tools.proteomecenter.org/wiki/index.php?title=Software:TPP).
+
+
+```{r Global Options, include=FALSE}
+knitr::opts_chunk$set(fig.width=7, fig.height=5, fig.align='center', warning=FALSE, message=FALSE)
+```
+
+
+#### 1. Load R packages and specify the search parameters and sequence database
+
+First we load R packages, specify the parameters and sequence database:
+
+```{r Setup}
+library(mzR)
+library(scales)
+REFERENCE <- '2018-10-25_HeLa_Thermo_QE_200ng_1'              # reference (could be local)
+QUERY <- rep('', 20)
+QUERY[1] <- '2018-10-26_HeLa_Thermo_QE_200ng_2'               # query for QC
+QUERY[2] <- '2018-10-26_HeLa_Thermo_QE_200ng_3'               # query for QC
+QUERY[3] <- '2018-10-25_HeLa_Thermo_QE_200ng_1'               # query for QC
+QUERY[4] <- '2018-10-26_HeLa_Thermo_QE_200ng_2'               # query for QC
+QUERY[5] <- '2018-10-25_HeLa_Thermo_QE_200ng_1'               # query for QC
+QUERY[6] <- '2018-10-26_HeLa_Thermo_QE_200ng_3'               # query for QC
+QUERY[7] <- '2018-10-26_HeLa_Thermo_QE_200ng_2'               # query for QC
+QUERY[8] <- '2018-10-26_HeLa_Thermo_QE_200ng_3'               # query for QC
+QUERY[9] <- '2018-10-26_HeLa_Thermo_QE_200ng_2'               # query for QC
+QUERY[10] <- '2018-10-25_HeLa_Thermo_QE_200ng_1'              # query for QC
+QUERY[11] <- '2018-10-26_HeLa_Thermo_QE_200ng_3'              # query for QC
+QUERY[12] <- '2018-10-26_HeLa_Thermo_QE_200ng_2'              # query for QC
+QUERY[13] <- '2018-10-25_HeLa_Thermo_QE_200ng_1'              # query for QC
+QUERY[14] <- '2018-10-26_HeLa_Thermo_QE_200ng_3'              # query for QC
+QUERY[15] <- '2018-10-26_HeLa_Thermo_QE_200ng_2'              # query for QC
+QUERY[16] <- '2018-10-25_HeLa_Thermo_QE_500ng'                # query for QC
+QUERY[17] <- '2018-10-25_HeLa_Thermo_QE_200ng_1'              # query for QC
+QUERY[18] <- '2018-10-26_HeLa_Thermo_QE_200ng_3'              # query for QC
+QUERY[19] <- '2018-10-26_HeLa_Thermo_QE_200ng_2'              # query for QC
+QUERY[20] <- '2018-10-26_HeLa_Thermo_QE_200ng_3'              # query for QC
+
+AMOUNT_INJECTED <- 200                                      # ng HeLa injected (reference)
+SPECTRAST_LIBRARY <- 'HeLa_QE200ng.splib'                   # HeLa library
+FASTA_FILE <- 'up000005640.fasta'                           # sequence database
+```
+
+
+#### 2. Convert raw data to mzML
+
+Then we convert the raw file to mzML:
+
+```{r Msconvert, eval=FALSE}
+system(paste('msconvert ', REFERENCE, '.raw -v --mzML', sep=''))
+for(Q in QUERY) system(paste('msconvert ', Q, '.raw -v --mzML', sep=''))
+```
+
+
+### 3. Look up instrument manufacturer and model from query files
+
+Here we read in instrument metadata from the mzML file using the [mzR](http://bioconductor.org/packages/release/bioc/html/mzR.html) package. 
+
+```{r Extract instrumentInfo}
+for(Q in QUERY) {
+  query_file <- openMSfile(paste(Q, '.mzML', sep=''))
+  make <- instrumentInfo(query_file)$manufacturer
+  model <- instrumentInfo(query_file)$model
+  cat('Query file', Q, 'is', make, model, '\n')   # look up makes and model
+}
+```
+
+
+#### 4. Perform SpectraST search
+
+Next we run comet with the defined parameters on each mzML file separately:
+
+```{r SpectraST search, eval=FALSE}
+for(Q in QUERY) {
+  system(paste('spectrast -sL', SPECTRAST_LIBRARY, ' -sD', FASTA_FILE,
+             ' -sTAA -sA! -s_HOM4 -sR! -sEpep.xml ', Q, '.mzML', sep = ''))
+}
+```
+
+
+#### 5. Validate search results with PeptideProphet
+
+We then validate the comet peptide-spectrum matches using PeptideProphet, keeping only p>=0.95:
+
+```{r PeptideProphet, eval=FALSE}
+for(Q in QUERY) {
+  system(paste('xinteract -N', sub('$', '.interact.pep.xml', Q), 
+             ' -p0.95 -l7 -PPM -O -D', FASTA_FILE, ' ', Q, '.pep.xml', sep = ''))
+}
+```
+
+
+### 6. Compare multiple TICs side-by-side
+
+Here we plot TICs "heatmaps" side-by-side: 
+
+```{r Compare TICs side-by-side, eval=TRUE}
+N_COMPARANDS <- 21
+reference_file <- openMSfile(paste(REFERENCE, '.mzML', sep=''))
+reference_TIC <- tic(reference_file)
+max_t <- round(max(reference_TIC[,1]))
+TIC_sum <- matrix(rep(0, N_COMPARANDS*max_t), nrow=N_COMPARANDS)
+
+for(x in 0:length(reference_TIC[,1])) TIC_sum[1,round(reference_TIC[x,1])] <-
+  TIC_sum[1,round(reference_TIC[x,1])]+reference_TIC[x,2]
+
+d <- 1
+for(Q in QUERY) {
+  d <- d+1
+  query_file <- openMSfile(paste(Q, '.mzML', sep=''))
+  query_TIC <- tic(query_file)
+  for(x in 0:length(query_TIC[,1])) TIC_sum[d,round(query_TIC[x,1])] <-
+  TIC_sum[d,round(query_TIC[x,1])]+query_TIC[x,2]
+}
+
+plot(0, 0, type="n", xaxs="i", yaxs="i", col="black", xlim=c(0, 21.5), 
+     ylim=c(0, max_t), xlab='run', ylab='retention time (min)', xaxt='n',
+     yaxp=c(0, max_t, round(max_t/10)))
+axis(1, at=1:21, labels=c('R',1:20))
+
+gradient <- viridis_pal(direction=-1, option='C')(512)
+for(y in 0:max_t) {
+  rel_int <- 1-TIC_sum[1,y]/max(TIC_sum); col_idx <- round(512*rel_int)
+  rect(0.5, y, 1.5, y+1, col=gradient[col_idx], border=NA)
+}
+
+d <- 1
+for(Q in QUERY) {
+  d <- d+1
+  for(y in 0:max_t) {
+    rel_int <- 1-TIC_sum[d,y]/max(TIC_sum); col_idx <- round(512*rel_int)
+    rect(d-0.5, y, d+0.5, y+1, col=gradient[col_idx], border=NA)
+  }
+}
+```
+\begin{center}Figure 1: Total ion chromatograms of 20 query QC runs shown side-by-side next to reference (R).\end{center}
+
+
+### 8. Extract PSMs from query and compare with reference
+
+Here we read in the library search results and compare with those from the reference:
+
+```{r Extract PSMs, eval=TRUE}
+#system(paste('idconvert ', REFERENCE, '.interact.pep.xml', sep='')) 
+#for(Q in QUERY) system(paste('idconvert ', Q, '.interact.pep.xml', sep='')) 
+
+PSMs <- rep(0,21)
+reference_ids <- openIDfile(paste(REFERENCE, '.mzid', sep=''))
+PSMs[1] <- nrow(psms(reference_ids))
+
+d <- 1
+for(Q in QUERY) {
+  d <- d+1
+  query_ids <- openIDfile(paste(Q, '.mzid', sep=''))
+  PSMs[d] <- nrow(psms(query_ids))
+}
+
+barplot(PSMs, names.arg=c('R',1:20), col=c('green', rep('blue',20)),
+        ylab='PSMs (p>=0.95)')
+```
+\begin{center}Figure 2: Number of PSMs from SpectraST library search of reference (green) and queries (blue).\end{center}

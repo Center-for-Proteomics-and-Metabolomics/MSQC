@@ -1,0 +1,121 @@
+---
+title: "MS2 QC Report"
+output:
+  html_document: default
+  pdf_document: default
+date version: May 10, 2019
+---
+
+[//]: # (This sub-report contains metrics related to the performance of the MS2. This includes metrics using the results of a SpectraST search. Metrics include the number of MS2 scans (and average per second), MS2 scan intensity distribution and median, MS2 frequency v retention time, MS2 mass error, fill time (for trap instruments) v. MS2/PSM counts or v. isolation %, and MS2 identifications or features/time unit. The reference used in the following is a typical run of 200 ng HeLa digest against the given LC method.)
+
+
+```{r Global Options, echo=FALSE}
+knitr::opts_chunk$set(fig.width=5, fig.height=5, fig.align='center', warning=FALSE, message=FALSE, error=TRUE)
+options(tinytex.verbose = TRUE)
+```
+
+
+[//]: # (1. Load R packages and specify the search parameters and sequence database)
+
+```{r Setup, echo=FALSE}
+library(mzR)
+library(MSnbase)
+library(scales)
+library(XML)
+library(pepXMLTab)
+library(ggplot2)
+
+# Commented out lines must be set before render call
+QUERY <- '2018-10-18_HeLa_OTOT'                              # query for QC
+# QUERY <- '2019-3-6_noAcid_HeLa_2'  
+# OUTPUT_DIR <- '/tmp/lkjdflkj'
+MZML_DIR <- 'C:/TPP/data/Ben'
+
+# The following are hard coded for now
+REFERENCE <- '2018-10-15_HeLa_OTOT'                              # reference (could be local)
+AMOUNT_INJECTED <- 200                                           # ng HeLa injected (reference)
+SPECTRAST_LIBRARY <- 'C:/TPP/data/Ben/HeLa.splib'                # HeLa library
+FASTA_FILE <- 'C:/TPP/data/Ben/up000005640.fasta'                # sequence database
+mzml_file <- paste(MZML_DIR,'/',QUERY,'.mzML',sep='')
+# cat('mzML file is',mzml_file)
+```
+
+[//]: # (2. Perform SpectraST search)
+
+[//]: # (Next we run SpectraST and PeptideProphet with the defined parameters on each mzML file separately:) 
+
+```{r SpectraST search, eval=TRUE, echo=FALSE}
+system(paste('spectrast -sL', SPECTRAST_LIBRARY, ' -sD', FASTA_FILE,
+             ' -sTAA -sA! -s_HOM4 -sR! -sEpep.xml ', QUERY, '.mzML', sep = ''))
+system(paste('xinteract -N', sub('$', '.interact.pep.xml', QUERY), 
+             ' -p0.95 -l7 -PPM -O -D', FASTA_FILE, ' ', QUERY, '.pep.xml', sep = ''))
+```
+
+[//]: # (3. Extract QC values from SpectraST search)
+
+[//]: # (Here we extract the number of estimated correct PSMs:)
+
+```{r Extract PSMs, eval=TRUE, echo=FALSE}
+system(paste('idconvert ', REFERENCE, '.interact.pep.xml', sep='')) 
+system(paste('idconvert ', QUERY, '.interact.pep.xml', sep='')) 
+
+reference_ids <- openIDfile(paste(REFERENCE, '.mzid', sep=''))
+query_ids <- openIDfile(paste(QUERY, '.mzid', sep=''))
+
+PSMs <- c(nrow(psms(reference_ids)), nrow(psms(query_ids)))
+barplot(PSMs, names.arg=c('reference','query'), col=c("green","blue"),
+        ylab='PSMs (p>=0.95)')
+
+A <- psms(query_ids)
+A <- psms(reference_ids)
+mz_error <- A[,5]-A[,6]
+mz <- A[,6]
+z <- A[,2]
+mean(mz_error[abs(mz_error)<0.1])
+mean(mz_error[abs(mz_error)<0.1]/mz[abs(mz_error)<0.1])
+
+hist(1e6*mz_error[abs(mz_error)<0.05]/mz[abs(mz_error)<0.05], breaks = 100, main = 'ppm error', xlab = 'ppm', xlim = c(-50,50) )
+
+# hist(1e6*mz_error[abs(mz_error)<0.01]/mz[abs(mz_error)<0.01], breaks = 200, main = 'ppm error', xlab = 'ppm', xlim = c(-10,10) )
+
+# hist(1e6*mz_error[abs(mz_error)<10]/mz[abs(mz_error)<10], breaks = 100, main = 'ppm error', xlab = 'ppm', xlim = c(-2000,2000) )
+
+
+
+recal_file <- openMSfile('2018-10-18_HeLa_OTOT-recal.indexed.mzML')
+recal_ids <- openIDfile('2018-10-18_HeLa_OTOT-recal.mzid')
+
+recal_file <- openMSfile('2018-10-18_HeLa_OTOT-recal.indexed.mzML')
+recal_ids <- openIDfile('2018-10-18_HeLa_OTOT-recal.mzid')
+
+
+recal_header <- header(recal_file)
+hist(recal_header$injectionTime)
+plot(11700:11900,recal_header$injectionTime[11700:11900], type='l')
+
+A <- psms(recal_ids)
+mz_error <- A[,5]-A[,6]
+mz <- A[,6]
+z <- A[,2]
+rt <- A[,18]
+scans <- A[,19]
+mean(mz_error[abs(mz_error)<0.1])
+mean(mz_error[abs(mz_error)<0.1]/mz[abs(mz_error)<0.1])
+
+
+hist(1e6*mz_error[abs(mz_error)<0.05]/mz[abs(mz_error)<0.05], breaks = 100, main = 'ppm error', xlab = 'ppm', xlim = c(-50,50) )
+
+indices <- which(abs(mz_error)<0.1)
+ppm_errors <- 1e6*mz_error[abs(mz_error)<0.1]/mz[abs(mz_error)<0.1]
+
+rbPal <- colorRampPalette(c('red','blue'))
+recal_tic <- tic(recal_file)
+colors <- rbPal(255)[as.numeric(cut(tic(recal_file)[scans[indices]-1,2],breaks = 255))]
+colors <- rbPal(255)[as.numeric(cut(recal_header$injectionTime[scans[indices]-1],breaks = 255))]
+
+plot(as.numeric(rt[indices]),1e6*mz_error[indices]/mz[indices], pch=20, col=colors, cex = 0.5) 
+plot(mz[indices],1e6*mz_error[indices]/mz[indices], pch=20, col=colors, cex = 0.5) 
+
+
+```
+\begin{center}Figure 1: Number of PSMs from SpectraST library search of reference (green) and query (blue).\end{center}

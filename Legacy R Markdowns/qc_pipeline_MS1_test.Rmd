@@ -1,0 +1,74 @@
+---
+title: "MS1 QC Report"
+output:
+  html_document: default
+  pdf_document: default
+date version: May 10, 2019
+---
+
+[//]: # (This sub-report contains metrics related to the performance of the MS1. This includes metrics using results of a SpectraST search blah blah. Metrics include the number of MS1 scans (and average per second), MS1 scan intensity distribution and median, MS1 frequency v retention time, and MS1 mass error.)
+
+
+```{r Global Options, echo=FALSE}
+knitr::opts_chunk$set(fig.width=5, fig.height=5, fig.align='center', warning=FALSE, message=FALSE, error=TRUE)
+options(tinytex.verbose = TRUE)
+```
+
+
+[//]: # (1. Load R packages and specify the search parameters and sequence database)
+
+```{r Setup, echo=FALSE}
+library(mzR)
+library(MSnbase)
+library(scales)
+library(XML)
+library(pepXMLTab)
+library(ggplot2)
+
+# Commented out lines must be set before render call
+QUERY <- '2018-10-18_HeLa_OTOT'                              # query for QC
+#QUERY <- '2019-06-18_HeLa_OTOT_badcol_unstable'
+# OUTPUT_DIR <- '/tmp/lkjdflkj'
+MZML_DIR <- 'C:/TPP/data/Ben'
+
+# The following are hard coded for now
+REFERENCE <- '2018-10-15_HeLa_OTOT'                              # reference (could be local)
+AMOUNT_INJECTED <- 200                                           # ng HeLa injected (reference)
+SPECTRAST_LIBRARY <- 'C:/TPP/data/Ben/HeLa.splib'                # HeLa library
+FASTA_FILE <- 'C:/TPP/data/Ben/up000005640.fasta'                # sequence database
+mzml_file <- paste(MZML_DIR,'/',QUERY,'.mzML',sep='')
+# cat('mzML file is',mzml_file)
+```
+
+[//]: # (2. Look up instrument manufacturer and model from query mzML file)
+
+[//]: # (Here we read in instrument metadata from the mzML file using the mzR package) 
+
+```{r Extract instrumentInfo, echo=FALSE}
+query_file <- openMSfile(mzml_file)
+make <- instrumentInfo(query_file)$manufacturer
+model <- instrumentInfo(query_file)$model
+cat('Query file is ', make, ' ', model, '.', sep='')   # look up make and model of file for QC    
+```
+
+[//]: # (3. Extract QC values from query and compare with reference)
+
+[//]: # (Here we extract and plot the TICs from the mzML files:)
+
+```{r Extract TICs, echo=FALSE}
+reference_file <- openMSfile(paste(REFERENCE, '.mzML', sep=''))
+query_file <- openMSfile(paste(QUERY, '.mzML', sep=''))
+
+reference_TIC <- tic(reference_file)
+query_TIC <- tic(query_file)
+
+cat('Query TIC total area ', 100*sum(query_TIC)/sum(reference_TIC), '% of reference.',
+    sep='')
+cat('Est. amount injected ', AMOUNT_INJECTED*sum(query_TIC)/sum(reference_TIC), ' ng.',
+    sep='')
+
+plot(reference_TIC[,1], reference_TIC[,2], type="h", lwd=1, col='green', 
+     xlab='retention time (min)', ylab='total ion current')
+lines(query_TIC[,1], query_TIC[,2], type="h", lwd=1, col='blue')
+```
+\begin{center}Figure 1: Total ion chromatograms of reference (green) and query (blue).\end{center}
